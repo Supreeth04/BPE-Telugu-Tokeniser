@@ -1,13 +1,24 @@
 import os
 from collections import defaultdict
 import csv
+import json
 
-def read_text(file):
+def read_text(file, max_lines=1000):
+    """Read text from CSV file with a limit on number of lines"""
     text = ''
-    with open(file, 'r', encoding='utf-8') as f:  # Open the CSV file in text mode
+    count = 0
+    print(f"Reading file: {file}")
+    with open(file, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
         for row in reader:
-            text += ' '.join(row) + '\n'  # Join each row into a single string
+            text += ' '.join(row) + '\n'
+            count += 1
+            if count % 100 == 0:
+                print(f"Read {count} lines...")
+            if count >= max_lines:
+                print(f"Reached max lines limit ({max_lines})")
+                break
+    print(f"Total lines read: {count}")
     return text
 
 def stats(ids):
@@ -65,20 +76,29 @@ def decode(ids, merges):
         return "[DECODE ERROR]"
 
 def train_bpe(text, vocab_size=4000, min_frequency=2):
+    print("Starting BPE training...")
     tokens = list(text.encode('utf-8'))
     ids = list(tokens)
     initial_vocab_size = len(set(tokens))
+    print(f"Initial vocabulary size: {initial_vocab_size}")
     
     merges = {}
     next_id = 256  # Start after basic byte values
     
+    iteration = 0
     while len(merges) + initial_vocab_size < vocab_size:
+        iteration += 1
+        if iteration % 100 == 0:
+            print(f"Training iteration {iteration}, current vocab size: {len(merges) + initial_vocab_size}")
+        
         pair_freqs = stats(ids)
         if not pair_freqs:
+            print("No more pairs to merge")
             break
             
         pair = max(pair_freqs.items(), key=lambda x: x[1])
         if pair[1] < min_frequency:
+            print(f"Stopping: pair frequency {pair[1]} below minimum {min_frequency}")
             break
             
         merges[pair[0]] = next_id
@@ -88,21 +108,48 @@ def train_bpe(text, vocab_size=4000, min_frequency=2):
         
         compression = len(tokens) / len(ids)
         if compression >= 3.2:
+            print(f"Stopping: reached target compression ratio {compression:.2f}")
             break
     
+    print(f"Training completed. Final vocab size: {len(merges) + initial_vocab_size}")
     return merges, compression
 
+def save_merges(merges, filepath):
+    """Save merges dictionary to a JSON file"""
+    # Convert integer keys to strings since JSON only allows string keys
+    serializable_merges = {str(pair): idx for pair, idx in merges.items()}
+    print(serializable_merges)
+    with open(filepath, 'w', encoding='utf-8') as f:
+        json.dump(serializable_merges, f)
+
+def load_merges(filepath):
+    """Load merges dictionary from a JSON file"""
+    print("loading merges")
+    with open(filepath, 'r', encoding='utf-8') as f:
+        serializable_merges = json.load(f)
+    # Convert back to tuple keys and integer values
+    merges = {(int(pair.split(',')[0][1:]), int(pair.split(',')[1][:-1])): idx 
+             for pair, idx in serializable_merges.items()}
+    print(merges)
+    return merges
+
 if __name__ == '__main__':
-    # Read and train
-    text = read_text('archive\\telugu_books\\telugu_books.csv')  # Change to your CSV file name
-    merges, compression = train_bpe(text)
+    # Read and train with smaller dataset
+    print("Starting tokenizer training...")
+    text = read_text('archive\\telugu_books\\telugu_books.csv')  # Limit to 1000 lines
+    print(f"Text length: {len(text)} characters")
     
-    # Print statistics
-    print(f"Vocabulary size: {len(merges) + 256}")  # 256 for byte tokens
+    merges, compression = train_bpe(text, vocab_size=2000)  # Reduced vocab size
+    
+    print("Saving trained merges...")
+    save_merges(merges, 'trained_merges.json')
+    
+    print(f"\nFinal Statistics:")
+    print(f"Vocabulary size: {len(merges) + 256}")
     print(f"Compression ratio: {compression:.2f}X")
     
-    # Test encoding and decoding
-    test_text = text[:200]
+    # Test with a smaller sample
+    test_text = text[:100]  # Test with just 100 characters
     print("\nTesting with sample text:")
     print("Original:", test_text)
     
